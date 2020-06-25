@@ -4,12 +4,16 @@ from pprint import pprint as pp
 
 
 class NQueens(object):
-    def __init__(self, board_length=4, population_count=10):
+    def __init__(self, board_length=4, population_count=10, mutation_probability=0.025):
         self.board_length = board_length
         self.population_count = population_count
+        self.initial_population = None
         self.population = None
         self.solution = None
+        self.scores = None
         self.target_score = self.get_target_score()
+        self.progress = []
+        self.mutation_probability = mutation_probability
 
     def get_initial_population(self):
         first_list = np.array(range(0, self.board_length))
@@ -50,42 +54,146 @@ class NQueens(object):
         target_score = n * (n+1) / 2
         return target_score
 
-    def evaluate_population(self):
+    def evaluate_population(self, population=None):
         scores = []
-        for individual in self.population:
+        if not population:
+            population = self.population
+
+        for individual in population:
             scores.append(self.evaluate(individual))
         return scores
 
-    def __call__(self):
-        print("Target Score is: {}".format(self.target_score))
-
-        self.population = self.get_initial_population()
-        print("Initial Population:")
-        pp(self.population)
-
-        scores = self.evaluate_population()
-        print("Scores:")
-        pp(scores)
-
-        for (score, solution) in zip(scores, self.population):
-            if score == self.target_score:
-                print("Found Solution: {}".format(solution))
-                self.print_board(solution)
-
-    def print_board(self, solution):
+    def print_board(self, solution, format_display=True):
         board = np.zeros((self.board_length, self.board_length))
         rows = solution
         cols = range(0, self.board_length)
         for (row, col) in zip(rows, cols):
             board[row, col] = 1
         print("\n")
-        pp(board)
+        if format_display:
+            for row in board:
+                line = ""
+                for col in row:
+                    if col:
+                        line = line + "Q "
+                    else:
+                        line = line + "- "
+                print(line)
+        else:
+            pp(board)
+
+    def select_individual_by_tournament(self):
+        # Select 2 random individuals and return best of them
+        fighter1 = random.randint(0, self.population_count - 1)
+        fighter2 = random.randint(0, self.population_count - 1)
+        while fighter2 == fighter1:
+            fighter2 = random.randint(0, self.board_length - 1)
+
+        if self.scores[fighter1] >= self.scores[fighter2]:
+            winner = fighter1
+        else:
+            winner = fighter2
+        return np.copy(self.population[winner])
+
+    def breed_by_crossover(self, parent1, parent2):
+        # Pick crossover point, avoding ends
+        crossover_point = random.randint(1, self.board_length - 2)
+
+        # Create children
+        child1 = np.hstack((parent1[0: crossover_point], parent2[crossover_point:]))
+        child2 = np.hstack((parent2[0: crossover_point], parent1[crossover_point:]))
+
+        return child1, child2
+
+    def mutate_population(self, population, mutation_probability=0.025):
+        # mutation_probability is % population need to be mutated
+        if mutation_probability > 100:
+            raise Exception("mutation_probability should be between 0 and 100")
+
+        mutation_count = int(self.population_count * mutation_probability)
+        for count in range(0, mutation_count):
+            start_position = random.randint(0, self.population_count - 1)
+            random_swap_index1 = random.randint(0, self.board_length - 1)
+            random_swap_index2 = random.randint(0, self.board_length - 1)
+            val0 = population[start_position][random_swap_index1]
+            population[start_position][random_swap_index1] = population[start_position][random_swap_index2]
+            population[start_position][random_swap_index2] = val0
+
+    def __call__(self):
+        print("Target Score is: {}".format(self.target_score))
+
+        max_generations = 100
+        max_attempts = 20
+        best_solution = None
+
+        for attempt in range(1, max_attempts):
+            print("\nStarting attempt #{}".format(attempt))
+
+            self.population = self.get_initial_population()
+            self.initial_population = np.copy(self.population)
+
+            print("Initial Population:")
+            pp(self.population)
+
+            for generation_index in range(0, max_generations):
+                self.scores = self.evaluate_population()
+                self.progress.append(sum(self.scores))
+                print("Generation {} score: {}, Scores: {}".format(generation_index, sum(self.scores), self.scores))
+
+                # sort population
+                sorted_population = sorted(zip(self.scores, self.population), key=lambda x: x[0], reverse=True)
+
+                # check for target reached
+                if sorted_population[0][0] >= self.target_score:
+                    break
+
+                best_solution = sorted_population[0]
+
+                # produce children
+                new_population = []
+                while len(new_population) < self.population_count:
+                    parent1 = self.select_individual_by_tournament()
+                    parent2 = self.select_individual_by_tournament()
+                    child1, child2 = self.breed_by_crossover(parent1, parent2)
+                    new_population.append(child1)
+                    new_population.append(child2)
+
+                # mutation
+                self.mutate_population(population=new_population, mutation_probability=self.mutation_probability)
+
+                new_scores = self.evaluate_population(population=new_population)
+                min_new_pop_score = min(new_scores)
+
+                # if there are any better scores in old population, then keep those individuals in new population
+                for score, individual in sorted_population:
+                    if score > min_new_pop_score:
+                        if (new_population == individual).all(1).any():
+                            # already present
+                            pass
+                        else:
+                            new_population.append(individual)
+                            new_scores.append(score)
+
+                # select top scores from new population for gen next
+                sorted_new_population = sorted(zip(new_scores, new_population), key=lambda x: x[0], reverse=True)
+                next_gen_population = []
+                for i in range(0, self.population_count):
+                    next_gen_population.append(sorted_new_population[i][1])
+                self.population = next_gen_population
+
+            for (score, solution) in zip(self.scores, self.population):
+                if score == self.target_score:
+                    print("\nFound Final Solution:")
+                    self.print_board(solution)
+                    print("\nFinal Solution: {}".format(solution))
+                    return solution
+
+        print("\nFound best (but not target) Solution:")
+        self.print_board(best_solution[1])
+        print("\nBest Solution: {}".format(best_solution[1]))
+        return None
 
 
 if __name__ == "__main__":
-    four_queens = NQueens(8, 10)
-    four_queens()
-
-
-
-
+    n_queens = NQueens(8, 20, 0.15)
+    solution = n_queens()
